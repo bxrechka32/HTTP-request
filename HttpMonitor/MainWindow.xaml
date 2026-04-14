@@ -1,0 +1,186 @@
+<Window x:Class="HttpMonitor.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:lvc="clr-namespace:LiveChartsCore.SkiaSharpView.WPF;assembly=LiveChartsCore.SkiaSharpView.WPF"
+        Title="HTTP Monitor" Height="700" Width="1050"
+        WindowStartupLocation="CenterScreen" Closing="Window_Closing">
+    <Window.Resources>
+        <Style TargetType="Button">
+            <Setter Property="Padding" Value="12,6"/>
+            <Setter Property="Margin" Value="4"/>
+            <Setter Property="FontSize" Value="13"/>
+        </Style>
+        <Style TargetType="TextBox">
+            <Setter Property="Margin" Value="4"/>
+            <Setter Property="Padding" Value="4,2"/>
+            <Setter Property="FontSize" Value="13"/>
+        </Style>
+        <Style TargetType="ComboBox">
+            <Setter Property="Margin" Value="4"/>
+            <Setter Property="Padding" Value="4,2"/>
+            <Setter Property="FontSize" Value="13"/>
+        </Style>
+        <Style TargetType="Label">
+            <Setter Property="FontSize" Value="13"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+        </Style>
+    </Window.Resources>
+
+    <TabControl Margin="6">
+        <!-- ==================== SERVER TAB ==================== -->
+        <TabItem Header="Сервер">
+            <Grid Margin="8">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="*"/>
+                </Grid.RowDefinitions>
+
+                <!-- Server controls -->
+                <StackPanel Grid.Row="0" Orientation="Horizontal" VerticalAlignment="Center">
+                    <Label Content="Порт:"/>
+                    <TextBox x:Name="PortBox" Width="80" Text="8080"/>
+                    <Button x:Name="StartStopServerBtn" Content="Запустить сервер" Click="StartStopServer_Click"/>
+                    <Ellipse x:Name="ServerStatusIndicator" Width="14" Height="14" Fill="Gray" Margin="8,0,4,0" VerticalAlignment="Center"/>
+                    <TextBlock x:Name="ServerStatusText" Text="Остановлен" VerticalAlignment="Center" FontSize="13"/>
+                </StackPanel>
+
+                <!-- Statistics panel -->
+                <Border Grid.Row="1" BorderBrush="#CCC" BorderThickness="1" CornerRadius="4" Padding="8" Margin="0,6">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="GET: " FontWeight="Bold"/>
+                        <TextBlock x:Name="GetCountText" Text="0" Margin="0,0,16,0"/>
+                        <TextBlock Text="POST: " FontWeight="Bold"/>
+                        <TextBlock x:Name="PostCountText" Text="0" Margin="0,0,16,0"/>
+                        <TextBlock Text="Всего: " FontWeight="Bold"/>
+                        <TextBlock x:Name="TotalCountText" Text="0" Margin="0,0,16,0"/>
+                        <TextBlock Text="Ср. время: " FontWeight="Bold"/>
+                        <TextBlock x:Name="AvgTimeText" Text="0 мс" Margin="0,0,16,0"/>
+                        <TextBlock Text="Время работы: " FontWeight="Bold"/>
+                        <TextBlock x:Name="UptimeText" Text="00:00:00"/>
+                    </StackPanel>
+                </Border>
+
+                <!-- Server logs -->
+                <Grid Grid.Row="2">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                    </Grid.RowDefinitions>
+                    <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,4">
+                        <Label Content="Фильтр:"/>
+                        <ComboBox x:Name="LogFilterCombo" Width="120" SelectionChanged="LogFilter_Changed">
+                            <ComboBoxItem Content="Все" IsSelected="True"/>
+                            <ComboBoxItem Content="GET"/>
+                            <ComboBoxItem Content="POST"/>
+                            <ComboBoxItem Content="200"/>
+                            <ComboBoxItem Content="400"/>
+                            <ComboBoxItem Content="404"/>
+                            <ComboBoxItem Content="500"/>
+                        </ComboBox>
+                        <Button Content="Очистить логи" Click="ClearLogs_Click"/>
+                        <Button Content="Сохранить логи в файл" Click="SaveLogs_Click"/>
+                    </StackPanel>
+                    <TextBox Grid.Row="1" x:Name="ServerLogBox" IsReadOnly="True"
+                             VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto"
+                             TextWrapping="Wrap" FontFamily="Consolas" FontSize="12"
+                             AcceptsReturn="True"/>
+                </Grid>
+            </Grid>
+        </TabItem>
+
+        <!-- ==================== CLIENT TAB ==================== -->
+        <TabItem Header="Клиент">
+            <Grid Margin="8">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="*"/>
+                </Grid.RowDefinitions>
+
+                <!-- Client controls -->
+                <Grid Grid.Row="0">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <Label Grid.Column="0" Content="URL:"/>
+                    <TextBox Grid.Column="1" x:Name="UrlBox" Text="https://jsonplaceholder.typicode.com/posts"/>
+                    <ComboBox Grid.Column="2" x:Name="MethodCombo" Width="90">
+                        <ComboBoxItem Content="GET" IsSelected="True"/>
+                        <ComboBoxItem Content="POST"/>
+                    </ComboBox>
+                    <Button Grid.Column="3" Content="Отправить запрос" Click="SendRequest_Click"/>
+                </Grid>
+
+                <!-- Request body -->
+                <Grid Grid.Row="1" Margin="0,4">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    <Label Grid.Column="0" Content="Тело (JSON):"/>
+                    <TextBox Grid.Column="1" x:Name="RequestBodyBox" Height="60"
+                             AcceptsReturn="True" TextWrapping="Wrap"
+                             VerticalScrollBarVisibility="Auto"
+                             FontFamily="Consolas" FontSize="12"
+                             Text="{}{&quot;message&quot;: &quot;Привет, сервер!&quot;}"/>
+                </Grid>
+
+                <!-- Response -->
+                <Grid Grid.Row="2">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                    </Grid.RowDefinitions>
+                    <Label Grid.Row="0" Content="Ответ:" FontWeight="Bold"/>
+                    <TextBox Grid.Row="1" x:Name="ResponseBox" IsReadOnly="True"
+                             VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto"
+                             TextWrapping="Wrap" FontFamily="Consolas" FontSize="12"
+                             AcceptsReturn="True"/>
+                </Grid>
+            </Grid>
+        </TabItem>
+
+        <!-- ==================== MONITORING TAB ==================== -->
+        <TabItem Header="Мониторинг">
+            <Grid Margin="8">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="*"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="*"/>
+                </Grid.RowDefinitions>
+
+                <!-- Chart -->
+                <GroupBox Grid.Row="0" Header="График нагрузки (запросов в минуту)">
+                    <lvc:CartesianChart x:Name="RequestChart"/>
+                </GroupBox>
+
+                <!-- Interval selector -->
+                <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,4">
+                    <Label Content="Интервал:"/>
+                    <ComboBox x:Name="ChartIntervalCombo" Width="140" SelectionChanged="ChartInterval_Changed">
+                        <ComboBoxItem Content="По минутам" IsSelected="True"/>
+                        <ComboBoxItem Content="По часам"/>
+                    </ComboBox>
+                </StackPanel>
+
+                <!-- Request log table -->
+                <GroupBox Grid.Row="2" Header="Таблица запросов">
+                    <DataGrid x:Name="RequestGrid" AutoGenerateColumns="False" IsReadOnly="True"
+                              CanUserSortColumns="True" GridLinesVisibility="Horizontal">
+                        <DataGrid.Columns>
+                            <DataGridTextColumn Header="Время" Binding="{Binding Timestamp}" Width="140"/>
+                            <DataGridTextColumn Header="Метод" Binding="{Binding Method}" Width="60"/>
+                            <DataGridTextColumn Header="URL" Binding="{Binding Url}" Width="*"/>
+                            <DataGridTextColumn Header="Статус" Binding="{Binding StatusCode}" Width="60"/>
+                            <DataGridTextColumn Header="Время (мс)" Binding="{Binding ElapsedMs}" Width="90"/>
+                        </DataGrid.Columns>
+                    </DataGrid>
+                </GroupBox>
+            </Grid>
+        </TabItem>
+    </TabControl>
+</Window>
