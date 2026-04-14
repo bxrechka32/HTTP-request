@@ -17,79 +17,80 @@ using System.Windows.Threading;
 using LiveChartsCore;
 using LiveChartsCore.Defaults;
 using LiveChartsCore.SkiaSharpView;
+using LiveChartsCore.SkiaSharpView.Painting;
+using SkiaSharp;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 
 namespace HttpMonitor
 {
-    /// <summary>
-    /// Модель записи лога запроса.
-    /// </summary>
     public class RequestLogEntry
     {
-        public string Timestamp { get; set; } = "";
-        public string Method { get; set; } = "";
-        public string Url { get; set; } = "";
-        public int StatusCode { get; set; }
-        public long ElapsedMs { get; set; }
-        public string Headers { get; set; } = "";
-        public string Body { get; set; } = "";
-        public DateTime RawTime { get; set; }
+        public string Timestamp  { get; set; } = "";
+        public string Method     { get; set; } = "";
+        public string Url        { get; set; } = "";
+        public int    StatusCode { get; set; }
+        public long   ElapsedMs  { get; set; }
+        public string Headers    { get; set; } = "";
+        public string Body       { get; set; } = "";
+        public DateTime RawTime  { get; set; }
     }
 
     public partial class MainWindow : Window
     {
         // ─── Server state ───────────────────────────────────────
-        private HttpListener? _listener;
+        private HttpListener?            _listener;
         private CancellationTokenSource? _serverCts;
-        private bool _serverRunning;
+        private bool     _serverRunning;
         private DateTime _serverStartTime;
-        private int _getCount;
-        private int _postCount;
+        private int  _getCount;
+        private int  _postCount;
         private long _totalProcessingMs;
         private readonly ConcurrentBag<StoredMessage> _messages = new();
 
         // ─── Logging ────────────────────────────────────────────
-        private readonly ObservableCollection<RequestLogEntry> _allLogs = new();
+        private readonly ObservableCollection<RequestLogEntry> _allLogs      = new();
         private readonly ObservableCollection<RequestLogEntry> _filteredLogs = new();
         private readonly object _logLock = new();
         private string _logFilePath = "";
 
         // ─── Chart ──────────────────────────────────────────────
-        private readonly ObservableCollection<DateTimePoint> _chartValues = new();
+        private LineSeries<DateTimePoint>? _chartSeries;
 
-        // ─── HTTP Client (singleton) ────────────────────────────
+        // ─── HTTP Client ────────────────────────────────────────
         private static readonly HttpClient _httpClient = new()
         {
             Timeout = TimeSpan.FromSeconds(30)
         };
 
-        // ─── Uptime timer ───────────────────────────────────────
+        // ─── Timers ─────────────────────────────────────────────
         private DispatcherTimer? _uptimeTimer;
 
         public MainWindow()
         {
             InitializeComponent();
 
-            RequestGrid.ItemsSource = _filteredLogs;
+            // Таблица мониторинга показывает ВСЕ логи
+            RequestGrid.ItemsSource = _allLogs;
 
-            // Chart setup
-            RequestChart.Series = new ISeries[]
+            _chartSeries = new LineSeries<DateTimePoint>
             {
-                new LineSeries<DateTimePoint>
-                {
-                    Values = _chartValues,
-                    Name = "Запросы",
-                    GeometrySize = 6,
-                    LineSmoothness = 0.3
-                }
+                Values         = new ObservableCollection<DateTimePoint>(),
+                Name           = "Запросы",
+                GeometrySize   = 6,
+                LineSmoothness = 0.3,
+                Stroke         = new SolidColorPaint(SKColors.DodgerBlue) { StrokeThickness = 2 },
+                GeometryStroke = new SolidColorPaint(SKColors.DodgerBlue) { StrokeThickness = 2 },
+                Fill           = null
             };
-            RequestChart.XAxes = new Axis[]
+
+            RequestChart.Series = new ISeries[] { _chartSeries };
+            RequestChart.XAxes  = new Axis[]
             {
                 new Axis
                 {
                     Labeler = v => new DateTime((long)v).ToString("HH:mm"),
-                    Name = "Время"
+                    Name    = "Время"
                 }
             };
             RequestChart.YAxes = new Axis[]
@@ -133,46 +134,47 @@ namespace HttpMonitor
                 return;
             }
 
-            _serverRunning = true;
-            _serverStartTime = DateTime.Now;
-            _getCount = 0;
-            _postCount = 0;
+            _serverRunning     = true;
+            _serverStartTime   = DateTime.Now;
+            _getCount          = 0;
+            _postCount         = 0;
             _totalProcessingMs = 0;
             _logFilePath = Path.Combine(
                 AppDomain.CurrentDomain.BaseDirectory, $"logs_{port}.txt");
 
             StartStopServerBtn.Content = "Остановить сервер";
-            PortBox.IsEnabled = false;
+            PortBox.IsEnabled          = false;
             ServerStatusIndicator.Fill = System.Windows.Media.Brushes.LimeGreen;
-            ServerStatusText.Text = $"Работает (:{port})";
+            ServerStatusText.Text      = $"Работает (:{port})";
 
             _serverCts = new CancellationTokenSource();
             StartUptimeTimer();
 
             AppendServerLog($"[{DateTime.Now:HH:mm:ss}] Сервер запущен на http://localhost:{port}/");
 
-            await AcceptRequestsAsync(_serverCts.Token);
+            // FIX: запускаем в фоне через Task.Run, не await в UI-потоке
+            _ = Task.Run(() => AcceptRequestsAsync(_serverCts.Token));
         }
 
         private void StopServer()
         {
             _serverCts?.Cancel();
-
-            try { _listener?.Stop(); } catch { /* ignore */ }
-            try { _listener?.Close(); } catch { /* ignore */ }
+            try { _listener?.Stop();  } catch { }
+            try { _listener?.Close(); } catch { }
             _listener = null;
 
             _serverRunning = false;
             _uptimeTimer?.Stop();
 
             StartStopServerBtn.Content = "Запустить сервер";
-            PortBox.IsEnabled = true;
+            PortBox.IsEnabled          = true;
             ServerStatusIndicator.Fill = System.Windows.Media.Brushes.Gray;
-            ServerStatusText.Text = "Остановлен";
+            ServerStatusText.Text      = "Остановлен";
 
             AppendServerLog($"[{DateTime.Now:HH:mm:ss}] Сервер остановлен.");
         }
 
+        // FIX: теперь Task (не async void), вызывается из Task.Run
         private async Task AcceptRequestsAsync(CancellationToken ct)
         {
             while (!ct.IsCancellationRequested && _listener != null && _listener.IsListening)
@@ -183,24 +185,23 @@ namespace HttpMonitor
                     context = await _listener.GetContextAsync().WaitAsync(ct);
                 }
                 catch (OperationCanceledException) { break; }
-                catch (ObjectDisposedException) { break; }
-                catch (HttpListenerException) { break; }
+                catch (ObjectDisposedException)     { break; }
+                catch (HttpListenerException)       { break; }
 
-                // Handle each request on a thread-pool thread (multithreaded)
                 _ = Task.Run(() => HandleRequestAsync(context), CancellationToken.None);
             }
         }
 
         private async Task HandleRequestAsync(HttpListenerContext context)
         {
-            var sw = Stopwatch.StartNew();
-            var request = context.Request;
+            var sw       = Stopwatch.StartNew();
+            var request  = context.Request;
             var response = context.Response;
 
-            string method = request.HttpMethod;
-            string url = request.RawUrl ?? "/";
+            string method     = request.HttpMethod;
+            string url        = request.RawUrl ?? "/";
             string headersStr = FormatHeaders(request.Headers);
-            string bodyStr = "";
+            string bodyStr    = "";
 
             if (request.HasEntityBody)
             {
@@ -218,17 +219,15 @@ namespace HttpMonitor
                     Interlocked.Increment(ref _getCount);
                     var info = new
                     {
-                        status = "running",
-                        uptime = (DateTime.Now - _serverStartTime).ToString(@"hh\:mm\:ss"),
-                        totalRequests = _getCount + _postCount,
-                        getRequests = _getCount,
-                        postRequests = _postCount,
+                        status    = "running",
+                        uptime    = (DateTime.Now - _serverStartTime).ToString(@"hh\:mm\:ss"),
+                        totalRequests       = _getCount + _postCount,
+                        getRequests         = _getCount,
+                        postRequests        = _postCount,
                         averageProcessingMs = (_getCount + _postCount) > 0
-                            ? _totalProcessingMs / (_getCount + _postCount)
-                            : 0
+                            ? _totalProcessingMs / (_getCount + _postCount) : 0
                     };
-                    string json = JsonConvert.SerializeObject(info, Formatting.Indented);
-                    buffer = Encoding.UTF8.GetBytes(json);
+                    buffer = Encoding.UTF8.GetBytes(JsonConvert.SerializeObject(info, Formatting.Indented));
                     response.ContentType = "application/json; charset=utf-8";
                 }
                 else if (method == "POST")
@@ -238,29 +237,29 @@ namespace HttpMonitor
                     if (string.IsNullOrWhiteSpace(bodyStr))
                     {
                         statusCode = 400;
-                        var err = new { error = "Тело запроса пустое." };
-                        buffer = Encoding.UTF8.GetBytes(JsonConvert.SerializeObject(err));
+                        buffer     = Encoding.UTF8.GetBytes(
+                            JsonConvert.SerializeObject(new { error = "Тело запроса пустое." }));
                         response.ContentType = "application/json; charset=utf-8";
                     }
                     else
                     {
                         try
                         {
-                            var parsed = JObject.Parse(bodyStr);
-                            string messageText = parsed["message"]?.ToString() ?? "";
-                            var id = Guid.NewGuid().ToString("N")[..8];
-                            _messages.Add(new StoredMessage { Id = id, Message = messageText, ReceivedAt = DateTime.Now });
+                            var parsed   = JObject.Parse(bodyStr);
+                            string msg   = parsed["message"]?.ToString() ?? "";
+                            var id       = Guid.NewGuid().ToString("N")[..8];
+                            _messages.Add(new StoredMessage { Id = id, Message = msg, ReceivedAt = DateTime.Now });
 
-                            var result = new { id, message = messageText, status = "saved" };
                             buffer = Encoding.UTF8.GetBytes(
-                                JsonConvert.SerializeObject(result, Formatting.Indented));
+                                JsonConvert.SerializeObject(
+                                    new { id, message = msg, status = "saved" }, Formatting.Indented));
                             response.ContentType = "application/json; charset=utf-8";
                         }
                         catch (JsonReaderException)
                         {
                             statusCode = 400;
-                            var err = new { error = "Некорректный JSON." };
-                            buffer = Encoding.UTF8.GetBytes(JsonConvert.SerializeObject(err));
+                            buffer     = Encoding.UTF8.GetBytes(
+                                JsonConvert.SerializeObject(new { error = "Некорректный JSON." }));
                             response.ContentType = "application/json; charset=utf-8";
                         }
                     }
@@ -268,53 +267,51 @@ namespace HttpMonitor
                 else
                 {
                     statusCode = 405;
-                    var err = new { error = $"Метод {method} не поддерживается." };
-                    buffer = Encoding.UTF8.GetBytes(JsonConvert.SerializeObject(err));
+                    buffer     = Encoding.UTF8.GetBytes(
+                        JsonConvert.SerializeObject(new { error = $"Метод {method} не поддерживается." }));
                     response.ContentType = "application/json; charset=utf-8";
                 }
             }
             catch (Exception ex)
             {
                 statusCode = 500;
-                var err = new { error = ex.Message };
-                buffer = Encoding.UTF8.GetBytes(JsonConvert.SerializeObject(err));
+                buffer     = Encoding.UTF8.GetBytes(
+                    JsonConvert.SerializeObject(new { error = ex.Message }));
                 response.ContentType = "application/json; charset=utf-8";
             }
 
             sw.Stop();
             Interlocked.Add(ref _totalProcessingMs, sw.ElapsedMilliseconds);
 
-            response.StatusCode = statusCode;
+            response.StatusCode      = statusCode;
             response.ContentLength64 = buffer.Length;
             try
             {
                 await response.OutputStream.WriteAsync(buffer);
                 response.OutputStream.Close();
             }
-            catch { /* client disconnected */ }
+            catch { }
 
-            // Log entry
             var entry = new RequestLogEntry
             {
-                Timestamp = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"),
-                Method = method,
-                Url = url,
+                Timestamp  = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"),
+                Method     = method,
+                Url        = url,
                 StatusCode = statusCode,
-                ElapsedMs = sw.ElapsedMilliseconds,
-                Headers = headersStr,
-                Body = bodyStr,
-                RawTime = DateTime.Now
+                ElapsedMs  = sw.ElapsedMilliseconds,
+                Headers    = headersStr,
+                Body       = bodyStr,
+                RawTime    = DateTime.Now
             };
 
-            // Dispatch UI updates to the main thread
+            // FIX: сначала файл (на фоновом потоке), потом UI через Dispatcher
+            WriteLogToFile(entry);
+
             Dispatcher.Invoke(() =>
             {
                 AddLogEntry(entry);
                 UpdateStats();
             });
-
-            // Write to log file
-            WriteLogToFile(entry);
         }
 
         // ════════════════════════════════════════════════════════
@@ -332,7 +329,7 @@ namespace HttpMonitor
             }
 
             string method = (MethodCombo.SelectedItem as ComboBoxItem)?.Content?.ToString() ?? "GET";
-            string body = RequestBodyBox.Text;
+            string body   = RequestBodyBox.Text;
 
             ResponseBox.Text = "Отправка запроса...";
             var sendBtn = (Button)sender;
@@ -356,14 +353,12 @@ namespace HttpMonitor
                 sw.Stop();
 
                 string responseBody = await httpResponse.Content.ReadAsStringAsync();
-
-                // Try to pretty-print JSON
                 try
                 {
                     var obj = JToken.Parse(responseBody);
                     responseBody = obj.ToString(Formatting.Indented);
                 }
-                catch { /* not JSON — leave as is */ }
+                catch { }
 
                 var sb = new StringBuilder();
                 sb.AppendLine($"Статус: {(int)httpResponse.StatusCode} {httpResponse.StatusCode}");
@@ -378,28 +373,17 @@ namespace HttpMonitor
 
                 ResponseBox.Text = sb.ToString();
             }
-            catch (HttpRequestException ex)
-            {
-                ResponseBox.Text = $"Ошибка HTTP: {ex.Message}";
-            }
-            catch (TaskCanceledException)
-            {
-                ResponseBox.Text = "Ошибка: таймаут запроса (30 сек).";
-            }
-            catch (Exception ex)
-            {
-                ResponseBox.Text = $"Ошибка: {ex.Message}";
-            }
-            finally
-            {
-                sendBtn.IsEnabled = true;
-            }
+            catch (HttpRequestException ex)    { ResponseBox.Text = $"Ошибка HTTP: {ex.Message}"; }
+            catch (TaskCanceledException)       { ResponseBox.Text = "Ошибка: таймаут запроса (30 сек)."; }
+            catch (Exception ex)               { ResponseBox.Text = $"Ошибка: {ex.Message}"; }
+            finally                            { sendBtn.IsEnabled = true; }
         }
 
         // ════════════════════════════════════════════════════════
         //  LOGGING & FILTERING
         // ════════════════════════════════════════════════════════
 
+        // FIX: вызывается ТОЛЬКО из UI-потока (через Dispatcher.Invoke)
         private void AddLogEntry(RequestLogEntry entry)
         {
             _allLogs.Add(entry);
@@ -407,7 +391,6 @@ namespace HttpMonitor
             if (MatchesFilter(entry))
                 _filteredLogs.Add(entry);
 
-            // Append to text log
             var sb = new StringBuilder();
             sb.AppendLine($"[{entry.Timestamp}] {entry.Method} {entry.Url} → {entry.StatusCode} ({entry.ElapsedMs} мс)");
             if (!string.IsNullOrEmpty(entry.Headers))
@@ -417,7 +400,7 @@ namespace HttpMonitor
             ServerLogBox.AppendText(sb.ToString());
             ServerLogBox.ScrollToEnd();
 
-            // Update chart data
+            // FIX: обновляем график сразу после добавления записи
             UpdateChartData();
         }
 
@@ -435,7 +418,7 @@ namespace HttpMonitor
 
         private void LogFilter_Changed(object sender, SelectionChangedEventArgs e)
         {
-            if (_allLogs == null) return; // designer guard
+            if (_allLogs == null) return;
 
             _filteredLogs.Clear();
             ServerLogBox?.Clear();
@@ -461,16 +444,18 @@ namespace HttpMonitor
             _allLogs.Clear();
             _filteredLogs.Clear();
             ServerLogBox.Clear();
-            _chartValues.Clear();
+            // FIX: сбрасываем серию
+            if (_chartSeries != null)
+                _chartSeries.Values = new ObservableCollection<DateTimePoint>();
         }
 
         private void SaveLogs_Click(object sender, RoutedEventArgs e)
         {
             var dialog = new Microsoft.Win32.SaveFileDialog
             {
-                FileName = "logs",
+                FileName   = "logs",
                 DefaultExt = ".txt",
-                Filter = "Текстовые файлы (*.txt)|*.txt|Все файлы (*.*)|*.*"
+                Filter     = "Текстовые файлы (*.txt)|*.txt|Все файлы (*.*)|*.*"
             };
 
             if (dialog.ShowDialog() == true)
@@ -502,7 +487,6 @@ namespace HttpMonitor
         private void WriteLogToFile(RequestLogEntry entry)
         {
             if (string.IsNullOrEmpty(_logFilePath)) return;
-
             try
             {
                 var line = $"[{entry.Timestamp}] {entry.Method} {entry.Url} → {entry.StatusCode} ({entry.ElapsedMs} мс) | Headers: {entry.Headers} | Body: {entry.Body}\n";
@@ -511,7 +495,7 @@ namespace HttpMonitor
                     File.AppendAllText(_logFilePath, line, Encoding.UTF8);
                 }
             }
-            catch { /* file write error — non-critical */ }
+            catch { }
         }
 
         // ════════════════════════════════════════════════════════
@@ -520,15 +504,14 @@ namespace HttpMonitor
 
         private void UpdateStats()
         {
-            GetCountText.Text = _getCount.ToString();
+            GetCountText.Text  = _getCount.ToString();
             PostCountText.Text = _postCount.ToString();
             int total = _getCount + _postCount;
             TotalCountText.Text = total.ToString();
-            AvgTimeText.Text = total > 0
-                ? $"{_totalProcessingMs / total} мс"
-                : "0 мс";
+            AvgTimeText.Text    = total > 0 ? $"{_totalProcessingMs / total} мс" : "0 мс";
         }
 
+        // FIX: заменяем Values целиком — это заставляет LiveCharts перерисовать график
         private void UpdateChartData()
         {
             bool byMinute = true;
@@ -537,15 +520,16 @@ namespace HttpMonitor
 
             var grouped = _allLogs
                 .GroupBy(e => byMinute
-                    ? new DateTime(e.RawTime.Year, e.RawTime.Month, e.RawTime.Day, e.RawTime.Hour, e.RawTime.Minute, 0)
-                    : new DateTime(e.RawTime.Year, e.RawTime.Month, e.RawTime.Day, e.RawTime.Hour, 0, 0))
+                    ? new DateTime(e.RawTime.Year, e.RawTime.Month, e.RawTime.Day,
+                                   e.RawTime.Hour, e.RawTime.Minute, 0)
+                    : new DateTime(e.RawTime.Year, e.RawTime.Month, e.RawTime.Day,
+                                   e.RawTime.Hour, 0, 0))
                 .OrderBy(g => g.Key)
                 .Select(g => new DateTimePoint(g.Key, g.Count()))
                 .ToList();
 
-            _chartValues.Clear();
-            foreach (var pt in grouped)
-                _chartValues.Add(pt);
+            if (_chartSeries != null)
+                _chartSeries.Values = new ObservableCollection<DateTimePoint>(grouped);
         }
 
         private void ChartInterval_Changed(object sender, SelectionChangedEventArgs e)
@@ -565,10 +549,7 @@ namespace HttpMonitor
             _uptimeTimer.Tick += (_, _) =>
             {
                 if (_serverRunning)
-                {
-                    var elapsed = DateTime.Now - _serverStartTime;
-                    UptimeText.Text = elapsed.ToString(@"hh\:mm\:ss");
-                }
+                    UptimeText.Text = (DateTime.Now - _serverStartTime).ToString(@"hh\:mm\:ss");
             };
             _uptimeTimer.Start();
         }
@@ -581,10 +562,8 @@ namespace HttpMonitor
         {
             var parts = new List<string>();
             foreach (string? key in headers.AllKeys)
-            {
                 if (key != null)
                     parts.Add($"{key}: {headers[key]}");
-            }
             return string.Join("; ", parts);
         }
 
@@ -600,14 +579,10 @@ namespace HttpMonitor
                 StopServer();
         }
 
-        // ════════════════════════════════════════════════════════
-        //  INNER TYPES
-        // ════════════════════════════════════════════════════════
-
         private class StoredMessage
         {
-            public string Id { get; set; } = "";
-            public string Message { get; set; } = "";
+            public string   Id         { get; set; } = "";
+            public string   Message    { get; set; } = "";
             public DateTime ReceivedAt { get; set; }
         }
     }
